@@ -403,6 +403,7 @@ export default function App() {
               onOpenTrade={handleOpenTradeDetail}
               onViewAllTrades={() => setCurrentView('trades')}
               onViewFramework={() => setCurrentView('framework')}
+              onRefreshData={refreshData}
             />
           )}
 

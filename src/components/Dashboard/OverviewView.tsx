@@ -30,6 +30,7 @@ interface OverviewViewProps {
   onOpenTrade: (trade: TradeRecord) => void;
   onViewAllTrades: () => void;
   onViewFramework?: () => void;
+  onRefreshData: () => Promise<void>;
 }
 
 export const OverviewView: React.FC<OverviewViewProps> = ({
@@ -39,6 +40,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onOpenTrade,
   onViewAllTrades,
   onViewFramework,
+  onRefreshData,
 }) => {
   const [timeframeFilter, setTimeframeFilter] = useState<'12M' | '6M' | '30D' | '7D' | '24H'>('12M');
   const [showPnlValue, setShowPnlValue] = useState(true);
@@ -150,7 +152,10 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => tradeRepository.clearDemoData()}
+              onClick={async () => {
+                await tradeRepository.clearDemoData();
+                await onRefreshData();
+              }}
               className="px-2.5 py-1 rounded-lg bg-[#111217] hover:bg-[#181922] text-[#8E95A2] hover:text-[#F87171] border border-[#1E2028] text-[11px] font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
             >
               <Trash2 className="h-3 w-3" />
