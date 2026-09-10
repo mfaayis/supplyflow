@@ -69,9 +69,19 @@ export const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
               }`}
             >
               {trade.actualR > 0 ? `+${trade.actualR.toFixed(2)}R ✓` : trade.actualR < 0 ? `${trade.actualR.toFixed(2)}R ✕` : `0.00R`}
+              {trade.pnl !== undefined && trade.pnl !== 0 && (
+                <span className="ml-2 text-xs font-normal opacity-80 border-l border-current pl-2">
+                  {trade.pnl > 0 ? '+' : ''}{trade.pnl.toFixed(2)} {trade.currency || 'USD'}
+                </span>
+              )}
             </div>
 
-            <span className="text-xs font-semibold px-2 py-0.5 rounded bg-[#0E0F14] text-[#CBD5E1] border border-[#181920]">
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded border ${
+              trade.result === 'TP HIT' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+              trade.result === 'SL HIT' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
+              trade.result === 'BREAKEVEN' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+              'bg-[#8B5CF6]/10 text-[#A78BFA] border-[#8B5CF6]/20'
+            }`}>
               {trade.result}
             </span>
 
@@ -142,7 +152,7 @@ export const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         {/* Modal Scrollable Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* Key Parameters Strip */}
-          <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 p-4 rounded-xl border border-[#181920] bg-[#0E0F14] text-xs">
+          <div className="grid grid-cols-2 sm:grid-cols-7 gap-3 p-4 rounded-xl border border-[#181920] bg-[#0E0F14] text-xs">
             <div>
               <span className="text-[#8E95A2] block text-[10px] uppercase font-medium">Session</span>
               <span className="font-bold text-white mt-0.5 block">{trade.session}</span>
@@ -154,7 +164,7 @@ export const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
               </span>
             </div>
             <div>
-              <span className="text-[#8E95A2] block text-[10px] uppercase font-medium">Entry Price</span>
+              <span className="text-[#8E95A2] block text-[10px] uppercase font-medium">Entry</span>
               <span className="font-mono-num font-bold text-white mt-0.5 block">
                 {trade.entryPrice || '—'}
               </span>
@@ -169,6 +179,12 @@ export const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
               <span className="text-[#8E95A2] block text-[10px] uppercase font-medium">Take Profit</span>
               <span className="font-mono-num font-bold text-emerald-300 mt-0.5 block">
                 {trade.takeProfit || '—'}
+              </span>
+            </div>
+            <div>
+              <span className="text-[#8E95A2] block text-[10px] uppercase font-medium">Exit</span>
+              <span className="font-mono-num font-bold text-[#CBD5E1] mt-0.5 block">
+                {trade.exitPrice || '—'}
               </span>
             </div>
             <div>

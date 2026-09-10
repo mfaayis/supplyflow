@@ -276,20 +276,34 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
     reader.readAsDataURL(file);
   };
 
-  // Toggle Mistake
+  // Currency symbol helper
+  const currencySymbol = (c: CurrencyCode) => {
+    const map: Record<CurrencyCode, string> = {
+      USD: '$', EUR: '€', GBP: '£', INR: '₹', CAD: 'C$', AUD: 'A$', JPY: '¥',
+    };
+    return map[c] || c;
+  };
+
+  // Risk amount (respects both riskPercentage and defaultRiskPercent fields)
+  const riskPercent = settings.riskPercentage ?? settings.defaultRiskPercent ?? 1.0;
+  const riskAmount = settings.accountBalance * (riskPercent / 100);
+
+  // Toggle Mistake — auto-sets followedPlan based on mistakes
   const toggleMistake = (m: MistakeType) => {
-    if (mistakes.includes(m)) {
-      setMistakes(mistakes.filter((x) => x !== m));
-    } else {
-      setMistakes([...mistakes, m]);
-    }
+    const newMistakes = mistakes.includes(m)
+      ? mistakes.filter((x) => x !== m)
+      : [...mistakes, m];
+    setMistakes(newMistakes);
+    // Auto-flag as rule break when any mistake is logged
+    if (newMistakes.length > 0) setFollowedPlan(false);
   };
 
   // Final Save Handler
   const handleSaveTrade = () => {
     const finalPair = pair === 'OTHER' && customPair ? customPair.toUpperCase().trim() : pair;
     const finalActualR = calculatedActualR;
-    const finalPnl = manualPnl !== '' ? parseFloat(manualPnl) : finalActualR * (settings.accountBalance * (settings.defaultRiskPercent / 100));
+    const finalPnl = manualPnl !== '' ? parseFloat(manualPnl) : Number((finalActualR * riskAmount).toFixed(2));
+    const finalPositionSize = riskDistance > 0 ? Number((riskAmount / riskDistance).toFixed(4)) : undefined;
 
     const newTrade: TradeRecord = {
       id: initialTrade?.id || 'trade-' + Date.now(),
@@ -325,11 +339,13 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
       plannedRR,
       meetsStandardRR,
       accountSize: settings.accountBalance,
-      riskPercent: settings.defaultRiskPercent,
+      riskPercent,
+      positionSize: finalPositionSize,
       currency,
       beforeScreenshot: beforeScreenshot || undefined,
       afterScreenshot: afterScreenshot || undefined,
-      followedPlan,
+      // Auto-correct followedPlan: if ANY mistake is logged, it's a rule break
+      followedPlan: mistakes.length > 0 ? false : followedPlan,
       mistakes,
       lesson: lesson.trim() || undefined,
       result,
@@ -1322,8 +1338,33 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
                   </div>
                   <div>
                     <span className="text-[#8E95A2] block text-[10px]">Plan Discipline</span>
-                    <span className={followedPlan ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
-                      {followedPlan ? 'Followed ✓' : 'Broken ✕'}
+                    <span className={mistakes.length > 0 || !followedPlan ? 'text-rose-400 font-bold' : 'text-emerald-400 font-bold'}>
+                      {mistakes.length > 0 || !followedPlan ? 'Broken ✕' : 'Followed ✓'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Outcome preview row */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2 border-t border-[#181920]">
+                  <div>
+                    <span className="text-[#8E95A2] block text-[10px]">Outcome</span>
+                    <span className={`font-bold text-xs ${result === 'TP HIT' ? 'text-emerald-400' : result === 'SL HIT' ? 'text-rose-400' : 'text-[#A78BFA]'}`}>
+                      {result}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[#8E95A2] block text-[10px]">Actual R</span>
+                    <span className={`font-mono-num font-bold text-xs ${calculatedActualR > 0 ? 'text-emerald-400' : calculatedActualR < 0 ? 'text-rose-400' : 'text-gray-400'}`}>
+                      {calculatedActualR > 0 ? '+' : ''}{calculatedActualR.toFixed(2)}R
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[#8E95A2] block text-[10px]">Est. P&amp;L ({currency})</span>
+                    <span className={`font-mono-num font-bold text-xs ${calculatedActualR > 0 ? 'text-emerald-400' : calculatedActualR < 0 ? 'text-rose-400' : 'text-gray-400'}`}>
+                      {manualPnl !== ''
+                        ? `${parseFloat(manualPnl) >= 0 ? '+' : ''}${parseFloat(manualPnl).toFixed(2)}`
+                        : `${calculatedActualR >= 0 ? '+' : ''}${(calculatedActualR * riskAmount).toFixed(2)}`}
+                      {' '}{currencySymbol(currency)}
                     </span>
                   </div>
                 </div>
@@ -1377,3 +1418,4 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
     </div>
   );
 };
+
