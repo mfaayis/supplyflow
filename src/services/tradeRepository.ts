@@ -70,11 +70,14 @@ export const tradeRepository = {
     }
 
     const trades = (data ?? []).map((row: any) => row.data as TradeRecord);
-    // If brand new user with no trades, seed demo trades into the cloud
-    if (trades.length === 0) {
+    
+    // If brand new user with no trades and hasn't explicitly cleared demo data, seed demo trades
+    const hasClearedDemo = localStorage.getItem('supplyflow_demo_cleared') === 'true';
+    if (trades.length === 0 && !hasClearedDemo) {
       await this._seedDemoTrades(userId);
       return DEMO_TRADES;
     }
+    
     // Update local cache
     localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(trades));
     return trades;
@@ -189,14 +192,19 @@ export const tradeRepository = {
       if (userId) {
         // Delete all demo trades from cloud
         const trades = await this.getAllTrades();
-        const demoIds = trades.filter((t) => t.isDemo).map((t) => t.id);
+        const demoIds = trades.filter((t) => t.isDemo || String(t.id).startsWith('demo-')).map((t) => t.id);
         if (demoIds.length > 0) {
-          await supabase.from('trades').delete().in('id', demoIds).eq('user_id', userId);
+          const { error } = await supabase.from('trades').delete().in('id', demoIds).eq('user_id', userId);
+          if (error) {
+            console.error('Failed to delete demo trades from Supabase:', error);
+            alert('Failed to delete cloud data: ' + error.message);
+          }
         }
       }
     }
-    const realOnly = this._getLocalTrades().filter((t) => !t.isDemo);
+    const realOnly = this._getLocalTrades().filter((t) => !t.isDemo && !String(t.id).startsWith('demo-'));
     localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(realOnly));
+    localStorage.setItem('supplyflow_demo_cleared', 'true');
     notifyListeners();
   },
 
@@ -208,6 +216,7 @@ export const tradeRepository = {
       }
     }
     localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify([]));
+    localStorage.setItem('supplyflow_demo_cleared', 'true');
     notifyListeners();
   },
 
