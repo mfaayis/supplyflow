@@ -1,6 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { TradeRecord, UserSettings } from './types';
-import { tradeRepository } from './services/tradeRepository';
+import { tradeRepository, DEFAULT_USER_SETTINGS } from './services/tradeRepository';
+import { useAuth } from './hooks/useAuth';
+import { supabase } from './lib/supabase';
+import { AuthScreen } from './components/Auth/AuthScreen';
 import { Logo } from './components/Shared/Logo';
 import { OverviewView } from './components/Dashboard/OverviewView';
 import { TradesListView } from './components/Trades/TradesListView';
@@ -25,6 +28,8 @@ import {
   ChevronRight,
   Layers,
   FileText,
+  LogOut,
+  Loader2,
 } from 'lucide-react';
 
 type AppView =
@@ -38,32 +43,49 @@ type AppView =
   | 'framework';
 
 export default function App() {
+  const { user, loading: authLoading } = useAuth();
+
   const [currentView, setCurrentView] = useState<AppView>('overview');
   const [trades, setTrades] = useState<TradeRecord[]>([]);
-  const [userSettings, setUserSettings] = useState<UserSettings>(tradeRepository.getSettings());
+  const [userSettings, setUserSettings] = useState<UserSettings>(DEFAULT_USER_SETTINGS);
+  const [dataLoading, setDataLoading] = useState(true);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [editingTrade, setEditingTrade] = useState<TradeRecord | null>(null);
   const [activeDetailTrade, setActiveDetailTrade] = useState<TradeRecord | null>(null);
   const [showMobileMore, setShowMobileMore] = useState(false);
 
-  // Load data on mount
-  useEffect(() => {
-    refreshData();
+  // Load data whenever user changes (login/logout)
+  const refreshData = useCallback(async () => {
+    setDataLoading(true);
+    try {
+      const [allTrades, settings] = await Promise.all([
+        tradeRepository.getAllTrades(),
+        tradeRepository.getSettings(),
+      ]);
+      setTrades(allTrades);
+      setUserSettings(settings);
+    } catch (e) {
+      console.error('Failed to load data:', e);
+    } finally {
+      setDataLoading(false);
+    }
   }, []);
 
-  const refreshData = () => {
-    const allTrades = tradeRepository.getAllTrades();
-    setTrades(allTrades);
-    setUserSettings(tradeRepository.getSettings());
-  };
-
-  const handleSaveTrade = (tradeData: Partial<TradeRecord>) => {
-    if (editingTrade) {
-      tradeRepository.updateTrade(editingTrade.id, tradeData);
-    } else {
-      tradeRepository.saveTrade(tradeData);
+  useEffect(() => {
+    if (user) {
+      refreshData();
+    } else if (!authLoading) {
+      setDataLoading(false);
     }
-    refreshData();
+  }, [user, authLoading, refreshData]);
+
+  const handleSaveTrade = async (tradeData: Partial<TradeRecord>) => {
+    if (editingTrade) {
+      await tradeRepository.updateTrade(editingTrade.id, tradeData);
+    } else {
+      await tradeRepository.saveTrade(tradeData);
+    }
+    await refreshData();
     setIsWizardOpen(false);
     setEditingTrade(null);
   };
@@ -78,26 +100,63 @@ export default function App() {
     setIsWizardOpen(true);
   };
 
-  const handleDuplicateTrade = (tradeId: string) => {
-    const duplicated = tradeRepository.duplicateTrade(tradeId);
+  const handleDuplicateTrade = async (tradeId: string) => {
+    const duplicated = await tradeRepository.duplicateTrade(tradeId);
     if (duplicated) {
-      refreshData();
+      await refreshData();
       setActiveDetailTrade(null);
       setEditingTrade(duplicated);
       setIsWizardOpen(true);
     }
   };
 
-  const handleDeleteTrade = (tradeId: string) => {
-    tradeRepository.deleteTrade(tradeId);
-    refreshData();
+  const handleDeleteTrade = async (tradeId: string) => {
+    await tradeRepository.deleteTrade(tradeId);
+    await refreshData();
     setActiveDetailTrade(null);
   };
 
-  const handleSaveSettings = (newSettings: UserSettings) => {
-    tradeRepository.saveSettings(newSettings);
+  const handleSaveSettings = async (newSettings: UserSettings) => {
+    await tradeRepository.saveSettings(newSettings);
     setUserSettings(newSettings);
   };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setTrades([]);
+    setUserSettings(DEFAULT_USER_SETTINGS);
+  };
+
+  // ── Auth gate ────────────────────────────────────────────────────────────────
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#000000] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Logo size="md" />
+          <Loader2 className="h-5 w-5 text-[#8B5CF6] animate-spin mt-2" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthScreen />;
+  }
+
+  if (dataLoading) {
+    return (
+      <div className="min-h-screen bg-[#000000] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Logo size="md" />
+          <p className="text-xs text-[#525866] mt-1">Loading your journal…</p>
+          <Loader2 className="h-5 w-5 text-[#8B5CF6] animate-spin" />
+        </div>
+      </div>
+    );
+  }
+
+  // ── Main App ─────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-[#000000] text-[#E1E4EA] flex flex-col md:flex-row selection:bg-[#8B5CF6] selection:text-white">
@@ -191,7 +250,7 @@ export default function App() {
                 >
                   <div className="flex items-center gap-3">
                     <Layers className="h-4 w-4 text-[#A78BFA]" />
-                    <span>S&amp;D Framework</span>
+                    <span>S&D Framework</span>
                   </div>
                   <span className="text-[9px] font-mono-num font-bold text-[#A78BFA] px-1.5 py-0.5 rounded bg-[#8B5CF6]/15 border border-[#8B5CF6]/30">
                     5-Year
@@ -274,25 +333,30 @@ export default function App() {
           </div>
         </div>
 
-        {/* Bottom Profile / Info Strip */}
+        {/* Bottom Profile / Sign Out Strip */}
         <div className="space-y-3 pt-4 border-t border-[#181920]">
           <div className="flex items-center gap-3 px-2 py-1">
             <div className="h-8 w-8 rounded-full bg-[#8B5CF6]/20 border border-[#8B5CF6]/40 flex items-center justify-center font-bold text-xs text-[#A78BFA]">
-              {(userSettings.userName?.trim() || 'Trader').charAt(0).toUpperCase()}
+              {(userSettings.userName?.trim() || 'T').charAt(0).toUpperCase()}
             </div>
-            <div className="overflow-hidden text-xs">
+            <div className="overflow-hidden text-xs flex-1">
               <span className="font-bold text-white block truncate">{userSettings.userName?.trim() || 'Trader'}</span>
-              <span className="text-[10px] text-[#8E95A2] font-mono-num block">
-                {userSettings.accountCurrency} {userSettings.accountBalance.toLocaleString()}
-              </span>
+              <span className="text-[10px] text-[#8E95A2] font-mono-num block truncate">{user.email}</span>
             </div>
+            <button
+              onClick={handleSignOut}
+              title="Sign out"
+              className="text-[#525866] hover:text-[#F87171] transition-colors cursor-pointer shrink-0"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
           </div>
         </div>
       </aside>
 
       {/* Main Content Area */}
       <div className="flex-1 md:ml-64 flex flex-col min-h-screen">
-        {/* Top Header on Desktop & Mobile */}
+        {/* Top Header */}
         <header className="border-b border-[#181920] bg-[#0A0B0E]/80 backdrop-blur-md px-4 sm:px-6 py-3 flex items-center justify-between sticky top-0 z-20">
           <div className="flex items-center gap-3">
             <div className="md:hidden">
@@ -313,7 +377,7 @@ export default function App() {
               }`}
             >
               <Layers className="h-3.5 w-3.5 text-[#A78BFA]" />
-              <span>S&amp;D Framework</span>
+              <span>S&D Framework</span>
             </button>
 
             <button
@@ -335,10 +399,7 @@ export default function App() {
             <OverviewView
               trades={trades}
               userSettings={userSettings}
-              onNewTrade={() => {
-                setEditingTrade(null);
-                setIsWizardOpen(true);
-              }}
+              onNewTrade={() => { setEditingTrade(null); setIsWizardOpen(true); }}
               onOpenTrade={handleOpenTradeDetail}
               onViewAllTrades={() => setCurrentView('trades')}
               onViewFramework={() => setCurrentView('framework')}
@@ -359,10 +420,7 @@ export default function App() {
             <TradesListView
               trades={trades}
               onOpenTrade={handleOpenTradeDetail}
-              onNewTrade={() => {
-                setEditingTrade(null);
-                setIsWizardOpen(true);
-              }}
+              onNewTrade={() => { setEditingTrade(null); setIsWizardOpen(true); }}
             />
           )}
 
@@ -374,10 +432,7 @@ export default function App() {
             <DisciplineView
               trades={trades}
               userSettings={userSettings}
-              onNewTrade={() => {
-                setEditingTrade(null);
-                setIsWizardOpen(true);
-              }}
+              onNewTrade={() => { setEditingTrade(null); setIsWizardOpen(true); }}
               onNavigateHome={() => setCurrentView('overview')}
               onRefreshData={refreshData}
             />
@@ -387,10 +442,7 @@ export default function App() {
             <PeriodicReviewsView
               trades={trades}
               userSettings={userSettings}
-              onNewTrade={() => {
-                setEditingTrade(null);
-                setIsWizardOpen(true);
-              }}
+              onNewTrade={() => { setEditingTrade(null); setIsWizardOpen(true); }}
               onNavigateHome={() => setCurrentView('overview')}
             />
           )}
@@ -412,26 +464,16 @@ export default function App() {
       {/* Mobile Bottom Navigation Bar */}
       <div className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-[#181920] bg-[#0A0B0E]/95 backdrop-blur-md px-2 py-1.5 flex items-center justify-around">
         <button
-          onClick={() => {
-            setCurrentView('overview');
-            setShowMobileMore(false);
-          }}
-          className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-lg text-[10px] font-medium transition-colors ${
-            currentView === 'overview' ? 'text-[#A78BFA]' : 'text-[#8E95A2]'
-          }`}
+          onClick={() => { setCurrentView('overview'); setShowMobileMore(false); }}
+          className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-lg text-[10px] font-medium transition-colors ${currentView === 'overview' ? 'text-[#A78BFA]' : 'text-[#8E95A2]'}`}
         >
           <LayoutDashboard className="h-5 w-5" />
           <span>Home</span>
         </button>
 
         <button
-          onClick={() => {
-            setCurrentView('trades');
-            setShowMobileMore(false);
-          }}
-          className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-lg text-[10px] font-medium transition-colors ${
-            currentView === 'trades' ? 'text-[#A78BFA]' : 'text-[#8E95A2]'
-          }`}
+          onClick={() => { setCurrentView('trades'); setShowMobileMore(false); }}
+          className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-lg text-[10px] font-medium transition-colors ${currentView === 'trades' ? 'text-[#A78BFA]' : 'text-[#8E95A2]'}`}
         >
           <BookOpen className="h-5 w-5" />
           <span>Trades</span>
@@ -439,24 +481,15 @@ export default function App() {
 
         {/* Center Prominent New Trade Button */}
         <button
-          onClick={() => {
-            setEditingTrade(null);
-            setIsWizardOpen(true);
-            setShowMobileMore(false);
-          }}
+          onClick={() => { setEditingTrade(null); setIsWizardOpen(true); setShowMobileMore(false); }}
           className="flex items-center justify-center h-11 w-11 rounded-full bg-[#8B5CF6] text-white shadow-lg shadow-[rgba(139,92,246,0.35)] -mt-4 active:scale-95 transition-transform cursor-pointer"
         >
           <Plus className="h-6 w-6 stroke-[3]" />
         </button>
 
         <button
-          onClick={() => {
-            setCurrentView('analytics');
-            setShowMobileMore(false);
-          }}
-          className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-lg text-[10px] font-medium transition-colors ${
-            currentView === 'analytics' ? 'text-[#A78BFA]' : 'text-[#8E95A2]'
-          }`}
+          onClick={() => { setCurrentView('analytics'); setShowMobileMore(false); }}
+          className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-lg text-[10px] font-medium transition-colors ${currentView === 'analytics' ? 'text-[#A78BFA]' : 'text-[#8E95A2]'}`}
         >
           <LineChart className="h-5 w-5" />
           <span>Analytics</span>
@@ -464,9 +497,7 @@ export default function App() {
 
         <button
           onClick={() => setShowMobileMore(!showMobileMore)}
-          className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-lg text-[10px] font-medium transition-colors ${
-            showMobileMore ? 'text-[#A78BFA]' : 'text-[#8E95A2]'
-          }`}
+          className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-lg text-[10px] font-medium transition-colors ${showMobileMore ? 'text-[#A78BFA]' : 'text-[#8E95A2]'}`}
         >
           <MoreHorizontal className="h-5 w-5" />
           <span>More</span>
@@ -478,107 +509,58 @@ export default function App() {
         <div className="md:hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex flex-col justify-end">
           <div className="bg-[#0A0B0E] border-t border-[#181920] rounded-t-2xl p-5 space-y-2 max-h-[70vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2 border-b border-[#181920]">
-              <span className="text-xs font-bold uppercase tracking-wider text-[#8E95A2]">
-                Menu
-              </span>
-              <button
-                onClick={() => setShowMobileMore(false)}
-                className="p-1 rounded-lg text-[#8E95A2] hover:text-white"
-              >
+              <span className="text-xs font-bold uppercase tracking-wider text-[#8E95A2]">Menu</span>
+              <button onClick={() => setShowMobileMore(false)} className="p-1 rounded-lg text-[#8E95A2] hover:text-white">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            <button
-              onClick={() => {
-                setCurrentView('framework');
-                setShowMobileMore(false);
-              }}
-              className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-[#0E0F14] text-xs font-bold text-white text-left cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <Layers className="h-4 w-4 text-[#A78BFA]" />
-                <div>
-                  <span className="block">S&amp;D Framework</span>
-                  <span className="text-[10px] text-[#8E95A2] font-normal">Methodology</span>
+            {[
+              { view: 'framework' as AppView, icon: <Layers className="h-4 w-4 text-[#A78BFA]" />, label: 'S&D Framework', sub: 'Methodology' },
+              { view: 'discipline' as AppView, icon: <ShieldCheck className="h-4 w-4 text-[#A78BFA]" />, label: 'Discipline', sub: '' },
+              { view: 'reviews' as AppView, icon: <FileText className="h-4 w-4 text-[#A78BFA]" />, label: 'Periodic Reviews', sub: '' },
+              { view: 'calendar' as AppView, icon: <Calendar className="h-4 w-4 text-[#A78BFA]" />, label: 'Calendar', sub: '' },
+              { view: 'settings' as AppView, icon: <Settings className="h-4 w-4 text-[#A78BFA]" />, label: 'Settings', sub: '' },
+            ].map(({ view, icon, label, sub }) => (
+              <button
+                key={view}
+                onClick={() => { setCurrentView(view); setShowMobileMore(false); }}
+                className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-[#0E0F14] text-xs font-bold text-white text-left cursor-pointer"
+              >
+                <div className="flex items-center gap-3">
+                  {icon}
+                  <div>
+                    <span className="block">{label}</span>
+                    {sub && <span className="text-[10px] text-[#8E95A2] font-normal">{sub}</span>}
+                  </div>
                 </div>
-              </div>
-              <ChevronRight className="h-4 w-4 text-[#8E95A2]" />
-            </button>
+                <ChevronRight className="h-4 w-4 text-[#8E95A2]" />
+              </button>
+            ))}
 
+            {/* Sign Out in mobile drawer */}
             <button
-              onClick={() => {
-                setCurrentView('discipline');
-                setShowMobileMore(false);
-              }}
-              className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-[#0E0F14] text-xs font-bold text-white text-left cursor-pointer"
+              onClick={() => { handleSignOut(); setShowMobileMore(false); }}
+              className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-[#F87171]/10 text-xs font-bold text-[#F87171] text-left cursor-pointer"
             >
-              <div className="flex items-center gap-3">
-                <ShieldCheck className="h-4 w-4 text-[#A78BFA]" />
-                <span>Discipline</span>
-              </div>
-              <ChevronRight className="h-4 w-4 text-[#8E95A2]" />
-            </button>
-
-            <button
-              onClick={() => {
-                setCurrentView('reviews');
-                setShowMobileMore(false);
-              }}
-              className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-[#0E0F14] text-xs font-bold text-white text-left cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <FileText className="h-4 w-4 text-[#A78BFA]" />
-                <span>Periodic Reviews</span>
-              </div>
-              <ChevronRight className="h-4 w-4 text-[#8E95A2]" />
-            </button>
-
-            <button
-              onClick={() => {
-                setCurrentView('calendar');
-                setShowMobileMore(false);
-              }}
-              className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-[#0E0F14] text-xs font-bold text-white text-left cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <Calendar className="h-4 w-4 text-[#A78BFA]" />
-                <span>Calendar</span>
-              </div>
-              <ChevronRight className="h-4 w-4 text-[#8E95A2]" />
-            </button>
-
-            <button
-              onClick={() => {
-                setCurrentView('settings');
-                setShowMobileMore(false);
-              }}
-              className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-[#0E0F14] text-xs font-bold text-white text-left cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <Settings className="h-4 w-4 text-[#A78BFA]" />
-                <span>Settings</span>
-              </div>
-              <ChevronRight className="h-4 w-4 text-[#8E95A2]" />
+              <LogOut className="h-4 w-4" />
+              <span>Sign Out</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* 30-Second Trade Record Wizard Modal */}
+      {/* Trade Wizard */}
       {isWizardOpen && (
         <QuickTradeWizard
           initialTrade={editingTrade}
           userSettings={userSettings}
           onSave={handleSaveTrade}
-          onCancel={() => {
-            setIsWizardOpen(false);
-            setEditingTrade(null);
-          }}
+          onCancel={() => { setIsWizardOpen(false); setEditingTrade(null); }}
         />
       )}
 
-      {/* Trade Detail Inspector Modal */}
+      {/* Trade Detail Modal */}
       {activeDetailTrade && (
         <TradeDetailModal
           trade={activeDetailTrade}

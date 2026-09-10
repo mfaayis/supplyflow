@@ -17,8 +17,8 @@ import {
 
 interface SettingsViewProps {
   settings: UserSettings;
-  onSaveSettings: (newSettings: UserSettings) => void;
-  onRefreshData: () => void;
+  onSaveSettings: (newSettings: UserSettings) => void | Promise<void>;
+  onRefreshData: () => void | Promise<void>;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -73,12 +73,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       try {
         const content = evt.target?.result as string;
-        const count = tradeRepository.importBackupJSON(content);
+        const count = await tradeRepository.importBackupJSON(content);
         setImportStatus(`Successfully imported ${count} trades.`);
-        onRefreshData();
+        await onRefreshData();
         setTimeout(() => setImportStatus(null), 3000);
       } catch (err: any) {
         setImportStatus(`Import failed: ${err.message || 'Invalid format'}`);
@@ -308,10 +308,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           {/* Clear Demo Data */}
           <button
             type="button"
-            onClick={() => {
+            onClick={async () => {
               if (window.confirm('Clear all demo trades? Real trades you entered will be preserved.')) {
-                tradeRepository.clearDemoData();
-                onRefreshData();
+                await tradeRepository.clearDemoData();
+                await onRefreshData();
               }
             }}
             className="flex items-center justify-between p-3.5 rounded-xl border border-[#181920] bg-[#0E0F14] hover:bg-[#111217] text-left transition-colors cursor-pointer"
@@ -334,10 +334,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
           <button
             type="button"
-            onClick={() => {
+            onClick={async () => {
               if (window.confirm('WARNING: This will delete ALL trades in your journal. Are you sure?')) {
-                tradeRepository.resetAllData();
-                onRefreshData();
+                await tradeRepository.resetAllData();
+                await onRefreshData();
               }
             }}
             className="px-4 py-2 rounded-xl bg-[#F87171]/10 hover:bg-[#F87171]/20 text-[#F87171] border border-[#F87171]/30 text-xs font-bold transition-colors cursor-pointer"

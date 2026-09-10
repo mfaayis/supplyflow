@@ -1,9 +1,10 @@
 import { TradeRecord, UserSettings } from '../types';
 import { DEMO_TRADES } from '../data/demoTrades';
+import { supabase } from '../lib/supabase';
 
+// ─── Local storage keys (used as offline cache / fallback) ───────────────────
 const TRADES_STORAGE_KEY = 'supplyflow_trades_v1';
 const SETTINGS_STORAGE_KEY = 'supplyflow_settings_v1';
-const HAS_USER_TRADES_KEY = 'supplyflow_has_user_trades_v1';
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   userName: 'Trader',
@@ -19,18 +20,29 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   theme: 'dark',
 };
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+async function getCurrentUserId(): Promise<string | null> {
+  const { data: { user } } = await supabase.auth.getUser();
+  return user?.id ?? null;
+}
+
+function isSupabaseConfigured(): boolean {
+  const url = import.meta.env.VITE_SUPABASE_URL as string;
+  return !!url && url !== 'https://placeholder.supabase.co';
+}
+
+// ─── Change listeners (for internal reactivity) ───────────────────────────────
 type ChangeListener = () => void;
 const listeners: Set<ChangeListener> = new Set();
 
 function notifyListeners() {
   listeners.forEach((listener) => {
-    try {
-      listener();
-    } catch (e) {
-      console.error('Error notifying trade listener:', e);
-    }
+    try { listener(); } catch (e) { console.error('Listener error:', e); }
   });
 }
+
+// ─── Repository ───────────────────────────────────────────────────────────────
 
 export const tradeRepository = {
   subscribe(listener: ChangeListener): () => void {
@@ -38,37 +50,345 @@ export const tradeRepository = {
     return () => listeners.delete(listener);
   },
 
-  getAllTrades(): TradeRecord[] {
-    try {
-      const data = localStorage.getItem(TRADES_STORAGE_KEY);
-      if (!data) {
-        // First launch: initialize with sample demo trades
-        localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(DEMO_TRADES));
-        return DEMO_TRADES;
+  // ── Trades ──────────────────────────────────────────────────────────────────
+
+  async getAllTrades(): Promise<TradeRecord[]> {
+    if (!isSupabaseConfigured()) return this._getLocalTrades();
+
+    const userId = await getCurrentUserId();
+    if (!userId) return this._getLocalTrades();
+
+    const { data, error } = await supabase
+      .from('trades')
+      .select('data')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Failed to load trades from Supabase:', error);
+      return this._getLocalTrades();
+    }
+
+    const trades = (data ?? []).map((row: any) => row.data as TradeRecord);
+    // If brand new user with no trades, seed demo trades into the cloud
+    if (trades.length === 0) {
+      await this._seedDemoTrades(userId);
+      return DEMO_TRADES;
+    }
+    // Update local cache
+    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(trades));
+    return trades;
+  },
+
+  async getTradeById(id: string): Promise<TradeRecord | undefined> {
+    const trades = await this.getAllTrades();
+    return trades.find((t) => t.id === id);
+  },
+
+  async saveTrade(trade: Partial<TradeRecord> | TradeRecord): Promise<void> {
+    const tradeId = trade.id || 'trade-' + Date.now();
+    const fullTrade: TradeRecord = this._buildFullTrade(trade, tradeId);
+
+    if (isSupabaseConfigured()) {
+      const userId = await getCurrentUserId();
+      if (userId) {
+        const { error } = await supabase.from('trades').upsert(
+          { id: tradeId, user_id: userId, data: fullTrade, updated_at: new Date().toISOString() },
+          { onConflict: 'id' }
+        );
+        if (error) console.error('Failed to save trade to Supabase:', error);
       }
-      return JSON.parse(data) as TradeRecord[];
-    } catch (e) {
-      console.error('Failed to load trades from storage:', e);
+    }
+
+    // Update local cache
+    const local = this._getLocalTrades();
+    const idx = local.findIndex((t) => t.id === tradeId);
+    const updated = idx >= 0 ? [...local] : [fullTrade, ...local];
+    if (idx >= 0) updated[idx] = fullTrade;
+    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(updated));
+    notifyListeners();
+  },
+
+  async updateTrade(id: string, updates: Partial<TradeRecord>): Promise<void> {
+    const trades = await this.getAllTrades();
+    const idx = trades.findIndex((t) => t.id === id);
+    if (idx < 0) return;
+
+    const resolvedMistakes = updates.mistakes !== undefined ? updates.mistakes : trades[idx].mistakes;
+    const resolvedFollowedPlan = (resolvedMistakes && resolvedMistakes.length > 0)
+      ? false
+      : (updates.followedPlan !== undefined ? updates.followedPlan : trades[idx].followedPlan);
+
+    const updatedTrade: TradeRecord = {
+      ...trades[idx],
+      ...updates,
+      followedPlan: resolvedFollowedPlan,
+      mistakes: resolvedMistakes,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (isSupabaseConfigured()) {
+      const userId = await getCurrentUserId();
+      if (userId) {
+        const { error } = await supabase.from('trades').upsert(
+          { id, user_id: userId, data: updatedTrade, updated_at: new Date().toISOString() },
+          { onConflict: 'id' }
+        );
+        if (error) console.error('Failed to update trade in Supabase:', error);
+      }
+    }
+
+    trades[idx] = updatedTrade;
+    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(trades));
+    notifyListeners();
+  },
+
+  async deleteTrade(id: string): Promise<void> {
+    if (isSupabaseConfigured()) {
+      const userId = await getCurrentUserId();
+      if (userId) {
+        const { error } = await supabase
+          .from('trades')
+          .delete()
+          .eq('id', id)
+          .eq('user_id', userId);
+        if (error) console.error('Failed to delete trade from Supabase:', error);
+      }
+    }
+
+    const local = this._getLocalTrades().filter((t) => t.id !== id);
+    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(local));
+    notifyListeners();
+  },
+
+  async duplicateTrade(id: string): Promise<TradeRecord | null> {
+    const target = await this.getTradeById(id);
+    if (!target) return null;
+
+    const newId = 'trade-' + Date.now();
+    const duplicated: TradeRecord = {
+      ...target,
+      id: newId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      tradeDate: new Date().toISOString().split('T')[0],
+      tradeTime: new Date().toTimeString().slice(0, 5),
+      result: 'OPEN',
+      actualR: 0,
+      pnl: 0,
+      isDemo: false,
+    };
+
+    await this.saveTrade(duplicated);
+    return duplicated;
+  },
+
+  async clearDemoData(): Promise<void> {
+    if (isSupabaseConfigured()) {
+      const userId = await getCurrentUserId();
+      if (userId) {
+        // Delete all demo trades from cloud
+        const trades = await this.getAllTrades();
+        const demoIds = trades.filter((t) => t.isDemo).map((t) => t.id);
+        if (demoIds.length > 0) {
+          await supabase.from('trades').delete().in('id', demoIds).eq('user_id', userId);
+        }
+      }
+    }
+    const realOnly = this._getLocalTrades().filter((t) => !t.isDemo);
+    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(realOnly));
+    notifyListeners();
+  },
+
+  async deleteAllTrades(): Promise<void> {
+    if (isSupabaseConfigured()) {
+      const userId = await getCurrentUserId();
+      if (userId) {
+        await supabase.from('trades').delete().eq('user_id', userId);
+      }
+    }
+    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify([]));
+    notifyListeners();
+  },
+
+  hasOnlyDemoData(): boolean {
+    const trades = this._getLocalTrades();
+    if (trades.length === 0) return false;
+    return trades.every((t) => t.isDemo);
+  },
+
+  hasAnyDemoData(): boolean {
+    return this._getLocalTrades().some((t) => t.isDemo);
+  },
+
+  hasRealTrades(): boolean {
+    return this._getLocalTrades().some((t) => !t.isDemo);
+  },
+
+  // ── Settings ─────────────────────────────────────────────────────────────────
+
+  async getSettings(): Promise<UserSettings> {
+    if (!isSupabaseConfigured()) return this._getLocalSettings();
+
+    const userId = await getCurrentUserId();
+    if (!userId) return this._getLocalSettings();
+
+    const { data, error } = await supabase
+      .from('user_settings')
+      .select('data')
+      .eq('user_id', userId)
+      .single();
+
+    if (error || !data) return DEFAULT_USER_SETTINGS;
+    return { ...DEFAULT_USER_SETTINGS, ...(data.data as UserSettings) };
+  },
+
+  async saveSettings(settings: UserSettings): Promise<void> {
+    if (isSupabaseConfigured()) {
+      const userId = await getCurrentUserId();
+      if (userId) {
+        const { error } = await supabase.from('user_settings').upsert(
+          { user_id: userId, data: settings, updated_at: new Date().toISOString() },
+          { onConflict: 'user_id' }
+        );
+        if (error) console.error('Failed to save settings to Supabase:', error);
+      }
+    }
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    notifyListeners();
+  },
+
+  // Keep sync alias for backward compatibility (reads local cache)
+  getUserSettings(): UserSettings {
+    return this._getLocalSettings();
+  },
+
+  // ── Backup / Export ──────────────────────────────────────────────────────────
+
+  exportBackupJSON(): string {
+    const backup = {
+      version: '1.0',
+      exportedAt: new Date().toISOString(),
+      trades: this._getLocalTrades(),
+      settings: this._getLocalSettings(),
+    };
+    return JSON.stringify(backup, null, 2);
+  },
+
+  async importBackupJSON(jsonStr: string): Promise<number> {
+    const data = JSON.parse(jsonStr);
+    if (!data.trades || !Array.isArray(data.trades)) {
+      throw new Error('Invalid backup file: missing trades array.');
+    }
+
+    if (isSupabaseConfigured()) {
+      const userId = await getCurrentUserId();
+      if (userId) {
+        // Delete existing and re-upload all
+        await supabase.from('trades').delete().eq('user_id', userId);
+        const rows = (data.trades as TradeRecord[]).map((t) => ({
+          id: t.id,
+          user_id: userId,
+          data: t,
+          updated_at: new Date().toISOString(),
+        }));
+        if (rows.length > 0) {
+          await supabase.from('trades').insert(rows);
+        }
+        if (data.settings) {
+          await this.saveSettings(data.settings);
+        }
+      }
+    }
+
+    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(data.trades));
+    if (data.settings) {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(data.settings));
+    }
+    notifyListeners();
+    return data.trades.length;
+  },
+
+  async resetAllData(): Promise<void> {
+    await this.deleteAllTrades();
+    await this.saveSettings(DEFAULT_USER_SETTINGS);
+    notifyListeners();
+  },
+
+  exportToCSV(): void {
+    const trades = this._getLocalTrades();
+    if (trades.length === 0) { alert('No trades to export.'); return; }
+
+    const headers = [
+      'ID','Date','Time','Pair','Direction','Session','Source','HTF Bias',
+      'Zone Quality','Prev Day HOD','Prev Day LOD','Two Day HOD','Two Day LOD',
+      'BOS','CHoCH','Entry Price','Stop Loss','Take Profit','Exit Price',
+      'Planned R:R','Meets 1:2 R:R','Actual R','P&L','Currency','Result',
+      'Followed Plan','Mistakes','Confluence Score','Setup Grade','Lesson','Is Demo',
+    ];
+
+    const rows = trades.map((t) => [
+      t.id, t.tradeDate, t.tradeTime, t.pair, t.direction, t.session, t.source,
+      t.htfBias, t.zoneQuality,
+      t.previousDayHOD?'YES':'NO', t.previousDayLOD?'YES':'NO',
+      t.twoDayHOD?'YES':'NO', t.twoDayLOD?'YES':'NO',
+      t.bos?'YES':'NO', t.choch?'YES':'NO',
+      t.entryPrice, t.stopLoss, t.takeProfit, t.exitPrice??'',
+      t.plannedRR, t.meetsStandardRR?'YES':'NO',
+      t.actualR, t.pnl??'', t.currency, t.result,
+      t.followedPlan?'YES':'NO',
+      `"${t.mistakes.join('; ')}"`,
+      t.confluenceScore, t.setupGrade,
+      `"${(t.lesson||'').replace(/"/g,'""')}"`,
+      t.isDemo?'YES':'NO',
+    ]);
+
+    const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `supplyflow_trades_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  },
+
+  // ── Private helpers ──────────────────────────────────────────────────────────
+
+  _getLocalTrades(): TradeRecord[] {
+    try {
+      const raw = localStorage.getItem(TRADES_STORAGE_KEY);
+      if (!raw) return DEMO_TRADES;
+      return JSON.parse(raw) as TradeRecord[];
+    } catch {
       return DEMO_TRADES;
     }
   },
 
-  getTradeById(id: string): TradeRecord | undefined {
-    const trades = this.getAllTrades();
-    return trades.find((t) => t.id === id);
+  _getLocalSettings(): UserSettings {
+    try {
+      const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (!raw) return DEFAULT_USER_SETTINGS;
+      return { ...DEFAULT_USER_SETTINGS, ...JSON.parse(raw) };
+    } catch {
+      return DEFAULT_USER_SETTINGS;
+    }
   },
 
-  saveTrade(trade: Partial<TradeRecord> | TradeRecord): void {
-    const trades = this.getAllTrades();
-    const tradeId = trade.id || 'trade-' + Date.now();
-    const existingIndex = trades.findIndex((t) => t.id === tradeId);
+  async _seedDemoTrades(userId: string): Promise<void> {
+    const rows = DEMO_TRADES.map((t) => ({
+      id: t.id,
+      user_id: userId,
+      data: t,
+      updated_at: new Date().toISOString(),
+    }));
+    await supabase.from('trades').insert(rows);
+    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(DEMO_TRADES));
+  },
 
-    // If it's a new user-recorded trade, mark that the user has entered real data
-    if (!trade.isDemo) {
-      localStorage.setItem(HAS_USER_TRADES_KEY, 'true');
-    }
-
-    const fullTrade: TradeRecord = {
+  _buildFullTrade(trade: Partial<TradeRecord>, tradeId: string): TradeRecord {
+    return {
       id: tradeId,
       createdAt: trade.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -117,240 +437,5 @@ export const tradeRepository = {
       confluenceScore: trade.confluenceScore ?? 5,
       isDemo: !!trade.isDemo,
     };
-
-    let updated: TradeRecord[];
-    if (existingIndex >= 0) {
-      updated = [...trades];
-      updated[existingIndex] = fullTrade;
-    } else {
-      updated = [fullTrade, ...trades];
-    }
-
-    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(updated));
-    notifyListeners();
-  },
-
-  updateTrade(id: string, updates: Partial<TradeRecord>): void {
-    const trades = this.getAllTrades();
-    const existingIndex = trades.findIndex((t) => t.id === id);
-    if (existingIndex >= 0) {
-      const resolvedMistakes = updates.mistakes !== undefined ? updates.mistakes : trades[existingIndex].mistakes;
-      const resolvedFollowedPlan = (resolvedMistakes && resolvedMistakes.length > 0)
-        ? false
-        : (updates.followedPlan !== undefined ? updates.followedPlan : trades[existingIndex].followedPlan);
-
-      const updatedTrade = {
-        ...trades[existingIndex],
-        ...updates,
-        followedPlan: resolvedFollowedPlan,
-        mistakes: resolvedMistakes,
-        updatedAt: new Date().toISOString(),
-      };
-      trades[existingIndex] = updatedTrade;
-      localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(trades));
-      notifyListeners();
-    }
-  },
-
-  deleteTrade(id: string): void {
-    const trades = this.getAllTrades();
-    const filtered = trades.filter((t) => t.id !== id);
-    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(filtered));
-    notifyListeners();
-  },
-
-  duplicateTrade(id: string): TradeRecord | null {
-    const target = this.getTradeById(id);
-    if (!target) return null;
-
-    const newId = 'trade-' + Date.now();
-    const duplicated: TradeRecord = {
-      ...target,
-      id: newId,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      tradeDate: new Date().toISOString().split('T')[0],
-      tradeTime: new Date().toTimeString().slice(0, 5),
-      result: 'OPEN',
-      actualR: 0,
-      pnl: 0,
-      isDemo: false,
-    };
-
-    this.saveTrade(duplicated);
-    return duplicated;
-  },
-
-  clearDemoData(): void {
-    const trades = this.getAllTrades();
-    const realOnly = trades.filter((t) => !t.isDemo);
-    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(realOnly));
-    notifyListeners();
-  },
-
-  resetToDemoData(): void {
-    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(DEMO_TRADES));
-    notifyListeners();
-  },
-
-  deleteAllTrades(): void {
-    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify([]));
-    notifyListeners();
-  },
-
-  hasOnlyDemoData(): boolean {
-    const trades = this.getAllTrades();
-    if (trades.length === 0) return false;
-    return trades.every((t) => t.isDemo);
-  },
-
-  hasAnyDemoData(): boolean {
-    const trades = this.getAllTrades();
-    return trades.some((t) => t.isDemo);
-  },
-
-  hasRealTrades(): boolean {
-    const trades = this.getAllTrades();
-    return trades.some((t) => !t.isDemo);
-  },
-
-  getUserSettings(): UserSettings {
-    try {
-      const data = localStorage.getItem(SETTINGS_STORAGE_KEY);
-      if (!data) return DEFAULT_USER_SETTINGS;
-      return { ...DEFAULT_USER_SETTINGS, ...JSON.parse(data) };
-    } catch {
-      return DEFAULT_USER_SETTINGS;
-    }
-  },
-
-  saveUserSettings(settings: UserSettings): void {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-    notifyListeners();
-  },
-
-  getSettings(): UserSettings {
-    return this.getUserSettings();
-  },
-
-  saveSettings(settings: UserSettings): void {
-    this.saveUserSettings(settings);
-  },
-
-  exportBackupJSON(): string {
-    const backup = {
-      version: '1.0',
-      exportedAt: new Date().toISOString(),
-      trades: this.getAllTrades(),
-      settings: this.getUserSettings(),
-    };
-    return JSON.stringify(backup, null, 2);
-  },
-
-  importBackupJSON(jsonStr: string): number {
-    const data = JSON.parse(jsonStr);
-    if (!data.trades || !Array.isArray(data.trades)) {
-      throw new Error('Invalid backup file: missing trades array.');
-    }
-    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(data.trades));
-    if (data.settings) {
-      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(data.settings));
-    }
-    notifyListeners();
-    return data.trades.length;
-  },
-
-  resetAllData(): void {
-    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify([]));
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(DEFAULT_USER_SETTINGS));
-    localStorage.removeItem(HAS_USER_TRADES_KEY);
-    notifyListeners();
-  },
-
-  exportToCSV(): void {
-    const trades = this.getAllTrades();
-    if (trades.length === 0) {
-      alert('No trades available to export.');
-      return;
-    }
-
-    const headers = [
-      'ID',
-      'Date',
-      'Time',
-      'Pair',
-      'Direction',
-      'Session',
-      'Source',
-      'HTF Bias',
-      'Zone Quality',
-      'Prev Day HOD',
-      'Prev Day LOD',
-      'Two Day HOD',
-      'Two Day LOD',
-      'BOS',
-      'CHoCH',
-      'Entry Price',
-      'Stop Loss',
-      'Take Profit',
-      'Exit Price',
-      'Planned R:R',
-      'Meets 1:2 R:R',
-      'Actual R',
-      'P&L',
-      'Currency',
-      'Result',
-      'Followed Plan',
-      'Mistakes',
-      'Confluence Score',
-      'Setup Grade',
-      'Lesson',
-      'Is Demo',
-    ];
-
-    const rows = trades.map((t) => [
-      t.id,
-      t.tradeDate,
-      t.tradeTime,
-      t.pair,
-      t.direction,
-      t.session,
-      t.source,
-      t.htfBias,
-      t.zoneQuality,
-      t.previousDayHOD ? 'YES' : 'NO',
-      t.previousDayLOD ? 'YES' : 'NO',
-      t.twoDayHOD ? 'YES' : 'NO',
-      t.twoDayLOD ? 'YES' : 'NO',
-      t.bos ? 'YES' : 'NO',
-      t.choch ? 'YES' : 'NO',
-      t.entryPrice,
-      t.stopLoss,
-      t.takeProfit,
-      t.exitPrice ?? '',
-      t.plannedRR,
-      t.meetsStandardRR ? 'YES' : 'NO',
-      t.actualR,
-      t.pnl ?? '',
-      t.currency,
-      t.result,
-      t.followedPlan ? 'YES' : 'NO',
-      `"${t.mistakes.join('; ')}"`,
-      t.confluenceScore,
-      t.setupGrade,
-      `"${(t.lesson || '').replace(/"/g, '""')}"`,
-      t.isDemo ? 'YES' : 'NO',
-    ]);
-
-    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `supplyflow_trades_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   },
 };
