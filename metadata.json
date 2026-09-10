@@ -1,0 +1,7 @@
+{
+  "name": "SUPPLYFLOW",
+  "description": "Multi-timeframe Supply & Demand trading journal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
