@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { TradeRecord, UserSettings } from './types';
 import { tradeRepository, DEFAULT_USER_SETTINGS } from './services/tradeRepository';
 import { useAuth } from './hooks/useAuth';
 import { supabase } from './lib/supabase';
+import { useRealtimeTrades } from './hooks/useRealtimeTrades';
+import { useNotifications } from './hooks/useNotifications';
 import { AuthScreen } from './components/Auth/AuthScreen';
 import { Logo } from './components/Shared/Logo';
 import { OverviewView } from './components/Dashboard/OverviewView';
@@ -14,7 +16,10 @@ import { SettingsView } from './components/Settings/SettingsView';
 import { SupplyDemandFrameworkView } from './components/Methodology/SupplyDemandFrameworkView';
 import { PeriodicReviewsView } from './components/Reviews/PeriodicReviewsView';
 import { QuickTradeWizard } from './components/TradeEntry/QuickTradeWizard';
+import { OpenTradeForm } from './components/TradeEntry/OpenTradeForm';
 import { TradeDetailModal } from './components/TradeDetail/TradeDetailModal';
+import { ActiveTradesView } from './components/ActiveTrades/ActiveTradesView';
+import { NotificationPanel, NotificationBell } from './components/Notifications/NotificationPanel';
 import {
   LayoutDashboard,
   BookOpen,
@@ -30,11 +35,13 @@ import {
   FileText,
   LogOut,
   Loader2,
+  Activity,
 } from 'lucide-react';
 
 type AppView =
   | 'overview'
   | 'trades'
+  | 'active'
   | 'analytics'
   | 'discipline'
   | 'reviews'
@@ -46,13 +53,38 @@ export default function App() {
   const { user, loading: authLoading } = useAuth();
 
   const [currentView, setCurrentView] = useState<AppView>('overview');
-  const [trades, setTrades] = useState<TradeRecord[]>([]);
+  const [baseTradesState, setBaseTradesState] = useState<TradeRecord[]>([]);
   const [userSettings, setUserSettings] = useState<UserSettings>(DEFAULT_USER_SETTINGS);
   const [dataLoading, setDataLoading] = useState(true);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
+  const [isOpenTradeFormOpen, setIsOpenTradeFormOpen] = useState(false);
   const [editingTrade, setEditingTrade] = useState<TradeRecord | null>(null);
   const [activeDetailTrade, setActiveDetailTrade] = useState<TradeRecord | null>(null);
   const [showMobileMore, setShowMobileMore] = useState(false);
+  const [recentlyClosed, setRecentlyClosed] = useState<TradeRecord[]>([]);
+  const prevStatusMapRef = useRef<Map<string, string>>(new Map());
+
+  // ── Realtime hooks ─────────────────────────────────────────────────────────
+  const { trades, activeTrades, livePrices, connectionStatus, refreshTrades } =
+    useRealtimeTrades(baseTradesState, user?.id);
+
+  const { notifications, unreadCount, dismiss: dismissNotification, markAllRead } =
+    useNotifications(user?.id);
+
+  // Track trades that just changed from ACTIVE → WON/LOST to show "just closed" section
+  useEffect(() => {
+    const newlyClosed: TradeRecord[] = [];
+    trades.forEach((trade) => {
+      const prev = prevStatusMapRef.current.get(trade.id);
+      if (prev === 'ACTIVE' && (trade.status === 'WON' || trade.status === 'LOST' || trade.status === 'AMBIGUOUS')) {
+        newlyClosed.push(trade);
+      }
+      prevStatusMapRef.current.set(trade.id, trade.status ?? 'CLOSED');
+    });
+    if (newlyClosed.length > 0) {
+      setRecentlyClosed((prev) => [...newlyClosed, ...prev].slice(0, 5));
+    }
+  }, [trades]);
 
   // Load data whenever user changes (login/logout)
   const refreshData = useCallback(async () => {
@@ -62,7 +94,7 @@ export default function App() {
         tradeRepository.getAllTrades(),
         tradeRepository.getSettings(),
       ]);
-      setTrades(allTrades);
+      setBaseTradesState(allTrades);
       setUserSettings(settings);
     } catch (e) {
       console.error('Failed to load data:', e);
@@ -123,7 +155,7 @@ export default function App() {
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
-    setTrades([]);
+    setBaseTradesState([]);
     setUserSettings(DEFAULT_USER_SETTINGS);
   };
 
@@ -171,17 +203,26 @@ export default function App() {
             <Logo size="md" />
           </div>
 
-          {/* Primary Quick Record Action */}
-          <button
-            onClick={() => {
-              setEditingTrade(null);
-              setIsWizardOpen(true);
-            }}
-            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#8B5CF6] hover:bg-[#7C3AED] py-3 px-4 text-xs font-black uppercase tracking-wider text-white transition-all shadow-[0_0_25px_rgba(139,92,246,0.35)] active:scale-[0.98] cursor-pointer"
-          >
-            <Plus className="h-4 w-4 stroke-[3]" />
-            <span>New Trade</span>
-          </button>
+          {/* Primary Quick Record Action — two modes */}
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              onClick={() => setIsOpenTradeFormOpen(true)}
+              className="flex items-center justify-center gap-1.5 rounded-xl bg-[#F59E0B] hover:bg-[#D97706] py-2.5 px-3 text-[10px] font-black uppercase tracking-wider text-black transition-all active:scale-[0.98] cursor-pointer"
+            >
+              <Activity className="h-3.5 w-3.5 stroke-[3]" />
+              <span>Open Live</span>
+            </button>
+            <button
+              onClick={() => {
+                setEditingTrade(null);
+                setIsWizardOpen(true);
+              }}
+              className="flex items-center justify-center gap-1.5 rounded-xl bg-[#8B5CF6] hover:bg-[#7C3AED] py-2.5 px-3 text-[10px] font-black uppercase tracking-wider text-white transition-all active:scale-[0.98] cursor-pointer"
+            >
+              <Plus className="h-3.5 w-3.5 stroke-[3]" />
+              <span>Log Trade</span>
+            </button>
+          </div>
 
           {/* Nav Groups */}
           <div className="space-y-4">
@@ -201,6 +242,27 @@ export default function App() {
                 >
                   <LayoutDashboard className="h-4 w-4" />
                   <span>Overview</span>
+                </button>
+
+                {/* Active Trades — with live count badge */}
+                <button
+                  onClick={() => setCurrentView('active')}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                    currentView === 'active'
+                      ? 'bg-[#F59E0B]/10 text-[#FBBF24] border border-[#F59E0B]/20 shadow-xs'
+                      : 'text-[#8E95A2] hover:text-white hover:bg-[#0E0F14]'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <Activity className="h-4 w-4" />
+                    <span>Active Trades</span>
+                  </div>
+                  {activeTrades.length > 0 && (
+                    <span className="flex items-center gap-1 font-mono-num text-[10px] text-[#F59E0B] px-1.5 py-0.5 rounded bg-[#F59E0B]/10 border border-[#F59E0B]/20">
+                      <span className="h-1 w-1 rounded-full bg-[#F59E0B] animate-pulse" />
+                      {activeTrades.length}
+                    </span>
+                  )}
                 </button>
 
                 <button
@@ -367,7 +429,7 @@ export default function App() {
             </span>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setCurrentView('framework')}
               className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold transition-all cursor-pointer ${
@@ -380,6 +442,19 @@ export default function App() {
               <span>S&D Framework</span>
             </button>
 
+            <NotificationBell
+              unreadCount={unreadCount}
+              onClick={markAllRead}
+            />
+
+            <button
+              onClick={() => setIsOpenTradeFormOpen(true)}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#F59E0B] hover:bg-[#D97706] text-black text-xs font-extrabold transition-all cursor-pointer"
+            >
+              <Activity className="h-3.5 w-3.5 stroke-[3]" />
+              <span>Open Live</span>
+            </button>
+
             <button
               onClick={() => {
                 setEditingTrade(null);
@@ -388,7 +463,7 @@ export default function App() {
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#8B5CF6] hover:bg-[#7C3AED] text-white text-xs font-extrabold shadow-[0_0_20px_rgba(139,92,246,0.3)] transition-all cursor-pointer"
             >
               <Plus className="h-3.5 w-3.5 stroke-[3]" />
-              <span>+ New Trade</span>
+              <span>Log Trade</span>
             </button>
           </div>
         </header>
@@ -404,6 +479,18 @@ export default function App() {
               onViewAllTrades={() => setCurrentView('trades')}
               onViewFramework={() => setCurrentView('framework')}
               onRefreshData={refreshData}
+            />
+          )}
+
+          {currentView === 'active' && (
+            <ActiveTradesView
+              activeTrades={activeTrades}
+              recentlyClosed={recentlyClosed}
+              livePrices={livePrices}
+              connectionStatus={connectionStatus}
+              onNewTrade={() => setIsOpenTradeFormOpen(true)}
+              onOpenDetail={handleOpenTradeDetail}
+              onRefreshData={async () => { await refreshData(); await refreshTrades(); }}
             />
           )}
 
@@ -551,13 +638,26 @@ export default function App() {
         </div>
       )}
 
-      {/* Trade Wizard */}
+      {/* Trade Wizard (existing — for logging past trades) */}
       {isWizardOpen && (
         <QuickTradeWizard
           initialTrade={editingTrade}
           userSettings={userSettings}
           onSave={handleSaveTrade}
           onCancel={() => { setIsWizardOpen(false); setEditingTrade(null); }}
+        />
+      )}
+
+      {/* Open Live Trade Form (new — creates ACTIVE monitored trade) */}
+      {isOpenTradeFormOpen && (
+        <OpenTradeForm
+          userSettings={userSettings}
+          onClose={() => setIsOpenTradeFormOpen(false)}
+          onSaved={async (trade) => {
+            setIsOpenTradeFormOpen(false);
+            await refreshData();
+            setCurrentView('active');
+          }}
         />
       )}
 
@@ -571,6 +671,14 @@ export default function App() {
           onDelete={handleDeleteTrade}
         />
       )}
+
+      {/* Global Notification Toasts */}
+      <NotificationPanel
+        notifications={notifications}
+        unreadCount={unreadCount}
+        onDismiss={dismissNotification}
+        onMarkAllRead={markAllRead}
+      />
     </div>
   );
 }

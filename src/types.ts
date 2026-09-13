@@ -21,6 +21,62 @@ export type TradeSource = 'PERSONAL' | 'LIVESTREAM';
 
 export type TradeResult = 'TP HIT' | 'SL HIT' | 'BREAKEVEN' | 'MANUAL CLOSE' | 'OPEN';
 
+// ── Automated Monitoring Types ────────────────────────────────────────────────
+
+/**
+ * Lifecycle status for automated trade monitoring.
+ * ACTIVE   = backend is monitoring this trade for SL/TP hits.
+ * WON      = TP was hit automatically (or manually marked).
+ * LOST     = SL was hit automatically (or manually marked).
+ * AMBIGUOUS = candle touched both SL and TP; user must review.
+ * CANCELLED / BREAKEVEN / CLOSED_MANUALLY = user action.
+ * DRAFT    = created but not yet submitted for monitoring.
+ * CLOSED   = legacy closed trade (migrated from old result field).
+ */
+export type TradeStatus =
+  | 'DRAFT'
+  | 'ACTIVE'
+  | 'WON'
+  | 'LOST'
+  | 'CANCELLED'
+  | 'BREAKEVEN'
+  | 'CLOSED_MANUALLY'
+  | 'AMBIGUOUS'
+  | 'CLOSED';
+
+export type ExitReason = 'TP_HIT' | 'SL_HIT' | 'MANUAL' | 'AMBIGUOUS';
+
+export type NotificationType =
+  | 'TP_HIT'
+  | 'SL_HIT'
+  | 'APPROACHING_TP'
+  | 'APPROACHING_SL'
+  | 'MARKET_DISCONNECTED'
+  | 'MARKET_RECONNECTED';
+
+export interface TradeNotification {
+  id: string;
+  tradeId: string;
+  type: NotificationType;
+  message: string;
+  symbol?: string;
+  price?: number;
+  rMultiple?: number;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface LivePrice {
+  symbol: string;
+  price: number;         // full precision
+  bid?: number;
+  ask?: number;
+  updatedAt: string;
+  source: 'twelvedata' | 'webhook' | 'manual';
+}
+
+export type MarketDataStatus = 'CONNECTED' | 'CONNECTING' | 'DISCONNECTED' | 'ERROR';
+
 export type SetupRating = 'A+' | 'A' | 'B' | 'C';
 
 export type CurrencyCode = 'USD' | 'EUR' | 'GBP' | 'INR' | 'CAD' | 'AUD' | 'JPY';
@@ -114,6 +170,70 @@ export interface TradeRecord {
 
   // Demo data marker
   isDemo?: boolean;
+
+  // ── Automated Monitoring Fields (all optional — backward compatible) ─────────
+  /**
+   * status drives the monitoring engine.
+   * undefined / absent  → treat as legacy CLOSED trade (result field is authoritative).
+   * 'ACTIVE'            → backend is monitoring.
+   * 'WON' / 'LOST'      → auto-closed by backend.
+   */
+  status?: TradeStatus;
+
+  /** Resolution source for how this trade was resolved */
+  resolutionSource?: 'AUTO_MARKET_DATA' | 'MANUAL' | 'BROKER_RECONCILIATION' | 'AMBIGUOUS';
+
+  /** Raw exit reason from the monitoring engine */
+  exitReason?: ExitReason;
+
+  /** The exact market data price that triggered the SL/TP (not broker price) */
+  triggerPrice?: number;
+  triggerTimestamp?: string;
+
+  /** The final exact exit price (if known, defaults to triggerPrice for market data) */
+  exitPriceRaw?: number;
+
+  /** True broker execution data (if reconciled later) */
+  brokerExitPrice?: number | null;
+  brokerExitTimestamp?: string | null;
+  brokerRMultiple?: number | null;
+
+  /** When monitoring started (trade opened) */
+  openedAt?: string;
+
+  /** When trade was auto-closed or manually closed */
+  closedAt?: string;
+
+  /** Last price seen by the backend for this symbol */
+  lastPrice?: number;
+  lastPriceAt?: string;
+
+  /** R-multiple computed by the backend at close */
+  rMultiple?: number;
+
+  /** Risk amount in account currency (position-size based) */
+  riskAmount?: number;
+
+  /** Reward amount in account currency at TP */
+  rewardAmount?: number;
+
+  /** Profit/loss in pips (raw, full precision) */
+  profitLossPips?: number;
+
+  /** Execution timeframe (e.g. 15M) vs setup timeframe (e.g. 1H) */
+  executionTimeframe?: Timeframe;
+  setupTimeframe?: Timeframe;
+
+  /** Supply/Demand zone levels associated with this trade */
+  zoneHigh?: number;
+  zoneLow?: number;
+  zoneTimeframe?: Timeframe;
+
+  /** When true, the user manually reviewed and accepted an ambiguous result */
+  ambiguityReviewed?: boolean;
+
+  /** Notes added after the trade was automatically closed */
+  postTradeNotes?: string;
 }
 
 export interface UserSettings {
@@ -128,6 +248,16 @@ export interface UserSettings {
   defaultTargetRR?: number;
   customPairs: string[];
   theme: 'dark';
+
+  // ── Monitoring Settings ──────────────────────────────────────────────────────
+  /** Enable automated SL/TP monitoring for ACTIVE trades */
+  monitoringEnabled?: boolean;
+  /** Proximity alert threshold 0–1 (default 0.80 = 80% of distance to level) */
+  proximityAlertThreshold?: number;
+  /** Show approaching-SL/TP notifications */
+  proximityAlertsEnabled?: boolean;
+  /** URL of the backend monitoring server (default: http://localhost:3001) */
+  backendUrl?: string;
 }
 
 export interface ConfluenceBreakdown {

@@ -182,10 +182,15 @@ export const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
               </span>
             </div>
             <div>
-              <span className="text-[#8E95A2] block text-[10px] uppercase font-medium">Exit</span>
+              <span className="text-[#8E95A2] block text-[10px] uppercase font-medium">
+                {trade.resolutionSource === 'AUTO_MARKET_DATA' ? 'Detected Exit' : 'Exit'}
+              </span>
               <span className="font-mono-num font-bold text-[#CBD5E1] mt-0.5 block">
                 {trade.exitPrice || '—'}
               </span>
+              {trade.resolutionSource === 'AUTO_MARKET_DATA' && (
+                <span className="text-[#A78BFA] block text-[9px] mt-0.5">Source: Twelve Data</span>
+              )}
             </div>
             <div>
               <span className="text-[#8E95A2] block text-[10px] uppercase font-medium">Planned R:R</span>
