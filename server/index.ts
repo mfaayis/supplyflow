@@ -17,10 +17,14 @@ import express from 'express';
 import cors from 'cors';
 import * as dotenv from 'dotenv';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { TwelveDataProvider } from './marketData/TwelveDataProvider';
 import { TradingViewWebhookHandler } from './marketData/TradingViewWebhookHandler';
 import { TradeMonitorEngine } from './TradeMonitorEngine';
 import { insertTradeEvent } from './supabaseAdmin';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Load server/.env
 dotenv.config({ path: path.resolve(__dirname, '.env') });

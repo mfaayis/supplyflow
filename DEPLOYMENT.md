@@ -1,4 +1,4 @@
-﻿# SUPPLYFLOW Deployment Guide
+# SUPPLYFLOW Deployment Guide
 
 This document outlines how to deploy SUPPLYFLOW in a production environment using a dual-hosting architecture.
 
@@ -23,6 +23,8 @@ SUPPLYFLOW is split into two distinct parts:
    SUPABASE_URL=https://<your-project-id>.supabase.co
    SUPABASE_SERVICE_ROLE_KEY=<your-secret-service-role-key>
    MARKET_DATA_API_KEY=<your-twelvedata-key>
+   
+   *(Note: SUPPLYFLOW enforces strict TLS certificate verification in production. `IGNORE_TLS_ERRORS` is automatically ignored in production.)*
 5. Deploy. Once deployed, note the public URL (e.g., https://supplyflow-backend.onrender.com).
 6. Verify it is running by visiting https://supplyflow-backend.onrender.com/health in your browser.
 

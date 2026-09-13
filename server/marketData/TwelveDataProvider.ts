@@ -91,8 +91,16 @@ export class TwelveDataProvider implements MarketDataProvider {
   private _openSocket(): Promise<void> {
     return new Promise((resolve, reject) => {
       console.log('[TwelveData] Connecting to WebSocket...');
-      const url = `${WS_URL}?apikey=${this.apiKey}`;
-      this.ws = new WebSocket(url);
+      
+      // Strict TLS by default. Only allow bypass in local dev if explicitly configured.
+      const isDev = process.env.NODE_ENV !== 'production';
+      const allowInsecureTls = process.env.IGNORE_TLS_ERRORS === 'true';
+      
+      const wsOptions = (isDev && allowInsecureTls) 
+        ? { rejectUnauthorized: false } 
+        : undefined;
+
+      this.ws = new WebSocket(`${WS_URL}?apikey=${this.apiKey}`, wsOptions);
 
       const timeout = setTimeout(() => {
         reject(new Error('[TwelveData] Connection timeout'));

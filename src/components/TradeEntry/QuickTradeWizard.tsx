@@ -25,6 +25,9 @@ import {
   RotateCcw,
   CheckCircle2,
   X,
+  Zap,
+  Activity,
+  Loader2,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -133,12 +136,33 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
 
   // UI state after saving
   const [savedTradeId, setSavedTradeId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Auto Calculations for Risk / Reward
   const numEntry = parseFloat(entryPrice) || 0;
   const numSL = parseFloat(stopLoss) || 0;
   const numTP = parseFloat(takeProfit) || 0;
   const numExit = parseFloat(exitPrice) || 0;
+
+  const canProceed = useMemo(() => {
+    if (currentStep === 1) {
+      const finalPair = pair === 'OTHER' && customPair ? customPair.toUpperCase().trim() : pair;
+      return !!finalPair;
+    }
+    if (currentStep === 6) {
+      if (!numEntry || numEntry <= 0) return false;
+      if (!numSL || numSL <= 0) return false;
+      if (!numTP || numTP <= 0) return false;
+      if (direction === 'BUY') {
+        if (numSL >= numEntry) return false;
+        if (numTP <= numEntry) return false;
+      } else {
+        if (numSL <= numEntry) return false;
+        if (numTP >= numEntry) return false;
+      }
+    }
+    return true;
+  }, [currentStep, pair, customPair, numEntry, numSL, numTP, direction]);
 
   const riskDistance = useMemo(() => {
     if (!numEntry || !numSL) return 0;
@@ -299,83 +323,89 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
   };
 
   // Final Save Handler
-  const handleSaveTrade = () => {
-    const finalPair = pair === 'OTHER' && customPair ? customPair.toUpperCase().trim() : pair;
-    const finalActualR = calculatedActualR;
-    const finalPnl = manualPnl !== '' ? parseFloat(manualPnl) : Number((finalActualR * riskAmount).toFixed(2));
-    const finalPositionSize = riskDistance > 0 ? Number((riskAmount / riskDistance).toFixed(4)) : undefined;
-
-    const newTrade: TradeRecord = {
-      id: initialTrade?.id || 'trade-' + Date.now(),
-      createdAt: initialTrade?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      tradeDate,
-      tradeTime,
-      pair: finalPair,
-      direction,
-      session,
-      source,
-      htfBias,
-      timeframeData,
-      zoneQuality,
-      previousDayHOD,
-      previousDayLOD,
-      twoDayHOD,
-      twoDayLOD,
-      reactingAroundKeyLevel,
-      structureConfirmation,
-      bos,
-      choch,
-      priceActionConfirmation,
-      candleConfirmation,
-      otherConfirmation: otherConfirmation.trim() || undefined,
-      setupNotes: setupNotes.trim() || undefined,
-      entryPrice: numEntry,
-      stopLoss: numSL,
-      takeProfit: numTP,
-      exitPrice: numExit || undefined,
-      riskDistance,
-      rewardDistance,
-      plannedRR,
-      meetsStandardRR,
-      accountSize: settings.accountBalance,
-      riskPercent,
-      positionSize: finalPositionSize,
-      currency,
-      beforeScreenshot: beforeScreenshot || undefined,
-      afterScreenshot: afterScreenshot || undefined,
-      // Auto-correct followedPlan: if ANY mistake is logged, it's a rule break
-      followedPlan: mistakes.length > 0 ? false : followedPlan,
-      mistakes,
-      lesson: lesson.trim() || undefined,
-      result,
-      actualR: finalActualR,
-      pnl: finalPnl,
-      setupGrade,
-      confluenceScore: confluence.score,
-      isDemo: false,
-    };
-
-    if (onSave) {
-      onSave(newTrade);
-    } else {
-      tradeRepository.saveTrade(newTrade);
-    }
-    setSavedTradeId(newTrade.id);
-    if (onSaved) {
-      onSaved(newTrade.id);
-    }
-
-    // Subtle celebration for logging trade
+  const handleSaveTrade = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
-      confetti({
-        particleCount: 35,
-        spread: 60,
-        origin: { y: 0.8 },
-        colors: ['#8B5CF6', '#34D399', '#A78BFA', '#F87171'],
-      });
-    } catch {
-      // Ignored if canvas-confetti unavailable
+      const finalPair = pair === 'OTHER' && customPair ? customPair.toUpperCase().trim() : pair;
+      const finalActualR = calculatedActualR;
+      const finalPnl = manualPnl !== '' ? parseFloat(manualPnl) : Number((finalActualR * riskAmount).toFixed(2));
+      const finalPositionSize = riskDistance > 0 ? Number((riskAmount / riskDistance).toFixed(4)) : undefined;
+
+      const newTrade: TradeRecord = {
+        id: initialTrade?.id || 'trade-' + Date.now(),
+        createdAt: initialTrade?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        tradeDate,
+        tradeTime,
+        pair: finalPair,
+        direction,
+        session,
+        source,
+        htfBias,
+        timeframeData,
+        zoneQuality,
+        previousDayHOD,
+        previousDayLOD,
+        twoDayHOD,
+        twoDayLOD,
+        reactingAroundKeyLevel,
+        structureConfirmation,
+        bos,
+        choch,
+        priceActionConfirmation,
+        candleConfirmation,
+        otherConfirmation: otherConfirmation.trim() || undefined,
+        setupNotes: setupNotes.trim() || undefined,
+        entryPrice: numEntry,
+        stopLoss: numSL,
+        takeProfit: numTP,
+        exitPrice: numExit || undefined,
+        riskDistance,
+        rewardDistance,
+        plannedRR,
+        meetsStandardRR,
+        accountSize: settings.accountBalance,
+        riskPercent,
+        positionSize: finalPositionSize,
+        currency,
+        beforeScreenshot: beforeScreenshot || undefined,
+        afterScreenshot: afterScreenshot || undefined,
+        // Auto-correct followedPlan: if ANY mistake is logged, it's a rule break
+        followedPlan: mistakes.length > 0 ? false : followedPlan,
+        mistakes,
+        lesson: lesson.trim() || undefined,
+        result,
+        actualR: finalActualR,
+        pnl: finalPnl,
+        setupGrade,
+        confluenceScore: confluence.score,
+        isDemo: false,
+      };
+
+      if (onSave) {
+        await onSave(newTrade);
+      } else {
+        await tradeRepository.saveTrade(newTrade);
+      }
+      setSavedTradeId(newTrade.id);
+      if (onSaved) {
+        onSaved(newTrade.id);
+      }
+
+      // Subtle celebration for logging trade
+      try {
+        confetti({
+          particleCount: 35,
+          spread: 60,
+          origin: { y: 0.8 },
+          colors: ['#8B5CF6', '#34D399', '#A78BFA', '#F87171'],
+        });
+      } catch {
+        // Ignored if canvas-confetti unavailable
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 

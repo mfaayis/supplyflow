@@ -52,7 +52,36 @@ type AppView =
 export default function App() {
   const { user, loading: authLoading } = useAuth();
 
-  const [currentView, setCurrentView] = useState<AppView>('overview');
+  const validViews = ['overview', 'trades', 'active', 'analytics', 'discipline', 'reviews', 'calendar', 'settings', 'framework'];
+  
+  const [currentView, _setCurrentView] = useState<AppView>(() => {
+    const hash = window.location.hash.replace('#', '') as AppView;
+    return validViews.includes(hash) ? hash : 'overview';
+  });
+
+  const setCurrentView = useCallback((view: AppView) => {
+    if (window.location.hash !== `#${view}`) {
+      window.history.pushState(null, '', `#${view}`);
+    }
+    _setCurrentView(view);
+  }, []);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.replace('#', '') as AppView;
+      if (validViews.includes(hash)) {
+        _setCurrentView(hash);
+      } else {
+        _setCurrentView('overview');
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    window.addEventListener('popstate', handleHashChange);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+      window.removeEventListener('popstate', handleHashChange);
+    };
+  }, []);
   const [baseTradesState, setBaseTradesState] = useState<TradeRecord[]>([]);
   const [userSettings, setUserSettings] = useState<UserSettings>(DEFAULT_USER_SETTINGS);
   const [dataLoading, setDataLoading] = useState(true);

@@ -71,13 +71,6 @@ export const tradeRepository = {
 
     const trades = (data ?? []).map((row: any) => row.data as TradeRecord);
     
-    // If brand new user with no trades and hasn't explicitly cleared demo data, seed demo trades
-    const hasClearedDemo = localStorage.getItem('supplyflow_demo_cleared') === 'true';
-    if (trades.length === 0 && !hasClearedDemo) {
-      await this._seedDemoTrades(userId);
-      return DEMO_TRADES;
-    }
-    
     // Update local cache
     localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(trades));
     return trades;
@@ -99,7 +92,10 @@ export const tradeRepository = {
           { id: tradeId, user_id: userId, data: fullTrade, updated_at: new Date().toISOString() },
           { onConflict: 'id' }
         );
-        if (error) console.error('Failed to save trade to Supabase:', error);
+        if (error) {
+          console.error('Failed to save trade to Supabase:', error);
+          throw new Error('Database error: Unable to save trade.');
+        }
       }
     }
 
@@ -137,7 +133,10 @@ export const tradeRepository = {
           { id, user_id: userId, data: updatedTrade, updated_at: new Date().toISOString() },
           { onConflict: 'id' }
         );
-        if (error) console.error('Failed to update trade in Supabase:', error);
+        if (error) {
+          console.error('Failed to update trade in Supabase:', error);
+          throw new Error('Database error: Unable to update trade.');
+        }
       }
     }
 
@@ -155,7 +154,10 @@ export const tradeRepository = {
           .delete()
           .eq('id', id)
           .eq('user_id', userId);
-        if (error) console.error('Failed to delete trade from Supabase:', error);
+        if (error) {
+          console.error('Failed to delete trade from Supabase:', error);
+          throw new Error('Database error: Unable to delete trade.');
+        }
       }
     }
 
@@ -363,15 +365,15 @@ export const tradeRepository = {
     document.body.removeChild(a);
   },
 
-  // ── Private helpers ──────────────────────────────────────────────────────────
+  // ── Private helpers ──────────────────────────────────────────────────────────  // --- INTERNAL HELPER METHODS ---
 
   _getLocalTrades(): TradeRecord[] {
     try {
       const raw = localStorage.getItem(TRADES_STORAGE_KEY);
-      if (!raw) return DEMO_TRADES;
+      if (!raw) return [];
       return JSON.parse(raw) as TradeRecord[];
     } catch {
-      return DEMO_TRADES;
+      return [];
     }
   },
 
@@ -383,17 +385,6 @@ export const tradeRepository = {
     } catch {
       return DEFAULT_USER_SETTINGS;
     }
-  },
-
-  async _seedDemoTrades(userId: string): Promise<void> {
-    const rows = DEMO_TRADES.map((t) => ({
-      id: t.id,
-      user_id: userId,
-      data: t,
-      updated_at: new Date().toISOString(),
-    }));
-    await supabase.from('trades').insert(rows);
-    localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(DEMO_TRADES));
   },
 
   _buildFullTrade(trade: Partial<TradeRecord>, tradeId: string): TradeRecord {
