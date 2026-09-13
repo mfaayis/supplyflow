@@ -71,12 +71,12 @@ app.use(express.json({ limit: '1mb' }));
 
 /**
  * Health check + status endpoint.
- * GET /api/status
+ * GET /api/status or /health
  */
-app.get('/api/status', (_req, res) => {
+app.get(['/api/status', '/health'], (_req, res) => {
   res.json({
-    ok: true,
-    marketDataConnected: provider.isConnected(),
+    status: 'ok',
+    marketData: provider.isConnected() ? 'connected' : 'disconnected',
     activeTrades: engine.activeCount,
     monitoredSymbols: engine.monitoredSymbols,
     uptime: Math.floor(process.uptime()),
