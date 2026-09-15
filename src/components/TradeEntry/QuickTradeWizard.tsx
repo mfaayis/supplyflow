@@ -131,8 +131,11 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
   // Step 9: Result
   const [result, setResult] = useState<TradeResult>(initialTrade?.result || 'TP HIT');
   const [exitPrice, setExitPrice] = useState<string>(initialTrade?.exitPrice ? String(initialTrade.exitPrice) : '');
-  const [manualR, setManualR] = useState<string>(initialTrade ? String(initialTrade.actualR) : '');
+  const [manualR, setManualR] = useState<string>('');
   const [manualPnl, setManualPnl] = useState<string>(initialTrade?.pnl ? String(initialTrade.pnl) : '');
+
+  // Step 6 extra: Lot Size
+  const [lotSize, setLotSize] = useState<string>(initialTrade?.positionSize ? String(initialTrade.positionSize) : '');
 
   // UI state after saving
   const [savedTradeId, setSavedTradeId] = useState<string | null>(null);
@@ -186,15 +189,24 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
     if (manualR !== '') {
       return parseFloat(manualR) || 0;
     }
+    // When no manual override, derive from result
     if (result === 'TP HIT') return plannedRR || 2.0;
     if (result === 'SL HIT') return -1.0;
     if (result === 'BREAKEVEN') return 0.0;
-    if (numExit && numEntry && riskDistance > 0) {
+    // MANUAL CLOSE — use exit price if provided
+    if (result === 'MANUAL CLOSE' && numExit && numEntry && riskDistance > 0) {
       const exitDist = direction === 'BUY' ? numExit - numEntry : numEntry - numExit;
       return Number((exitDist / riskDistance).toFixed(2));
     }
     return 0;
   }, [manualR, result, plannedRR, numExit, numEntry, riskDistance, direction]);
+
+  // When user clicks a result button, clear any manual R override so the
+  // auto-calculation kicks in (prevents SL HIT showing as +2R)
+  const handleSetResult = (r: TradeResult) => {
+    setResult(r);
+    setManualR('');
+  };
 
   // Confluence & Setup Rating
   const confluence = useMemo(() => {
@@ -330,7 +342,9 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
       const finalPair = pair === 'OTHER' && customPair ? customPair.toUpperCase().trim() : pair;
       const finalActualR = calculatedActualR;
       const finalPnl = manualPnl !== '' ? parseFloat(manualPnl) : Number((finalActualR * riskAmount).toFixed(2));
-      const finalPositionSize = riskDistance > 0 ? Number((riskAmount / riskDistance).toFixed(4)) : undefined;
+      const finalPositionSize = lotSize !== ''
+        ? parseFloat(lotSize)
+        : riskDistance > 0 ? Number((riskAmount / riskDistance).toFixed(4)) : undefined;
 
       const newTrade: TradeRecord = {
         id: initialTrade?.id || 'trade-' + Date.now(),
@@ -1037,6 +1051,38 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
                 </div>
               </div>
 
+              {/* Lot Size row */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-[#A78BFA] mb-1.5">
+                    Lot Size (Optional)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    placeholder="e.g. 0.10"
+                    value={lotSize}
+                    onChange={(e) => setLotSize(e.target.value)}
+                    className="w-full rounded-xl border border-[#181920] bg-[#0E0F14] px-3.5 py-2.5 text-base font-mono-num font-semibold text-[#A78BFA] focus:border-[#8B5CF6] focus:outline-none placeholder-[#525866]"
+                  />
+                  <span className="text-[10px] text-[#525866] mt-1 block">
+                    Leave blank to auto-calculate from account risk %
+                  </span>
+                </div>
+                <div className="flex items-center">
+                  <div className="rounded-xl border border-[#181920] bg-[#0E0F14] p-3 text-xs text-[#8E95A2] w-full">
+                    <span className="block text-[10px] uppercase text-[#525866] mb-1">Risk Amount</span>
+                    <span className="font-mono-num font-bold text-white text-base">
+                      {currencySymbol(currency)}{riskAmount.toFixed(2)}
+                    </span>
+                    <span className="text-[10px] text-[#525866] block mt-0.5">
+                      {riskPercent}% of {currencySymbol(currency)}{settings.accountBalance.toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               {/* Auto Calculated Risk / Reward Card */}
               <div className="rounded-xl border border-[#181920] bg-[#0E0F14] p-4.5">
                 <div className="grid grid-cols-3 gap-4 text-center divide-x divide-[#181920]">
@@ -1243,7 +1289,7 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
                     <button
                       key={r}
                       type="button"
-                      onClick={() => setResult(r)}
+                      onClick={() => handleSetResult(r)}
                       className={`py-3 px-3 rounded-xl text-xs font-bold border transition-all text-center cursor-pointer ${
                         result === r
                           ? r === 'TP HIT'

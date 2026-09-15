@@ -115,9 +115,15 @@ export default function App() {
     }
   }, [trades]);
 
+  const hasLoadedRef = useRef(false);
+
   // Load data whenever user changes (login/logout)
   const refreshData = useCallback(async () => {
-    setDataLoading(true);
+    // Only show the full-screen spinner on the very first load.
+    // Subsequent background refreshes should be silent.
+    if (!hasLoadedRef.current) {
+      setDataLoading(true);
+    }
     try {
       const [allTrades, settings] = await Promise.all([
         tradeRepository.getAllTrades(),
@@ -128,6 +134,7 @@ export default function App() {
     } catch (e) {
       console.error('Failed to load data:', e);
     } finally {
+      hasLoadedRef.current = true;
       setDataLoading(false);
     }
   }, []);
@@ -136,6 +143,7 @@ export default function App() {
     if (user) {
       refreshData();
     } else if (!authLoading) {
+      hasLoadedRef.current = false;
       setDataLoading(false);
     }
   }, [user, authLoading, refreshData]);
