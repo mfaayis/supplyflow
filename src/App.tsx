@@ -118,16 +118,12 @@ export default function App() {
   const hasLoadedRef = useRef(false);
 
   // Load data whenever user changes (login/logout)
-  const refreshData = useCallback(async () => {
-    // Only show the full-screen spinner on the very first load.
-    // Subsequent background refreshes should be silent.
-    if (!hasLoadedRef.current) {
-      setDataLoading(true);
-    }
+  const refreshData = useCallback(async (userId?: string) => {
+    const uid = userId ?? user?.id;
     try {
       const [allTrades, settings] = await Promise.all([
-        tradeRepository.getAllTrades(),
-        tradeRepository.getSettings(),
+        tradeRepository.getAllTrades(uid),
+        tradeRepository.getSettings(uid),
       ]);
       setBaseTradesState(allTrades);
       setUserSettings(settings);
@@ -137,11 +133,20 @@ export default function App() {
       hasLoadedRef.current = true;
       setDataLoading(false);
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     if (user) {
-      refreshData();
+      // Show cached data immediately (zero latency)
+      const cachedTrades = tradeRepository._getLocalTrades();
+      const cachedSettings = tradeRepository._getLocalSettings();
+      if (cachedTrades.length > 0 || !hasLoadedRef.current) {
+        setBaseTradesState(cachedTrades);
+        setUserSettings(cachedSettings);
+        setDataLoading(false);
+      }
+      // Then sync with Supabase in background (silent refresh)
+      refreshData(user.id);
     } else if (!authLoading) {
       hasLoadedRef.current = false;
       setDataLoading(false);
@@ -198,31 +203,18 @@ export default function App() {
 
   // ── Auth gate ────────────────────────────────────────────────────────────────
 
-  if (authLoading) {
+  // While we're confirming the session for the very first time and have no
+  // cached session, show a minimal non-blocking spinner (rare / first visit).
+  if (authLoading && !user) {
     return (
       <div className="min-h-screen bg-[#000000] flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <Logo size="md" />
-          <Loader2 className="h-5 w-5 text-[#8B5CF6] animate-spin mt-2" />
-        </div>
+        <Loader2 className="h-5 w-5 text-[#8B5CF6] animate-spin" />
       </div>
     );
   }
 
   if (!user) {
     return <AuthScreen />;
-  }
-
-  if (dataLoading) {
-    return (
-      <div className="min-h-screen bg-[#000000] flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <Logo size="md" />
-          <p className="text-xs text-[#525866] mt-1">Loading your journal…</p>
-          <Loader2 className="h-5 w-5 text-[#8B5CF6] animate-spin" />
-        </div>
-      </div>
-    );
   }
 
   // ── Main App ─────────────────────────────────────────────────────────────────

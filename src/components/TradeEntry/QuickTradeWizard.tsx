@@ -132,7 +132,7 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
   const [result, setResult] = useState<TradeResult>(initialTrade?.result || 'TP HIT');
   const [exitPrice, setExitPrice] = useState<string>(initialTrade?.exitPrice ? String(initialTrade.exitPrice) : '');
   const [manualR, setManualR] = useState<string>('');
-  const [manualPnl, setManualPnl] = useState<string>(initialTrade?.pnl ? String(initialTrade.pnl) : '');
+  const [manualPnl, setManualPnl] = useState<string>('');
 
   // Step 6 extra: Lot Size
   const [lotSize, setLotSize] = useState<string>(initialTrade?.positionSize ? String(initialTrade.positionSize) : '');
@@ -206,6 +206,7 @@ export const QuickTradeWizard: React.FC<QuickTradeWizardProps> = ({
   const handleSetResult = (r: TradeResult) => {
     setResult(r);
     setManualR('');
+    setManualPnl('');
   };
 
   // Confluence & Setup Rating

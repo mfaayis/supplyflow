@@ -9,12 +9,25 @@ export interface AuthState {
 }
 
 export function useAuth(): AuthState {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Read the session synchronously from Supabase's in-memory cache so we
+  // never block on a round-trip when the token is already present locally.
+  const getInitialSession = (): Session | null => {
+    try {
+      // @ts-ignore – internal property, stable in supabase-js v2
+      return (supabase.auth as any)._session ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const initialSession = getInitialSession();
+  const [user, setUser] = useState<User | null>(initialSession?.user ?? null);
+  const [session, setSession] = useState<Session | null>(initialSession);
+  // Skip the loading spinner if we already have a session in memory
+  const [loading, setLoading] = useState<boolean>(initialSession === null);
 
   useEffect(() => {
-    // Get initial session
+    // Confirm / refresh the session asynchronously
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);

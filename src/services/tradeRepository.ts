@@ -52,10 +52,10 @@ export const tradeRepository = {
 
   // ── Trades ──────────────────────────────────────────────────────────────────
 
-  async getAllTrades(): Promise<TradeRecord[]> {
+  async getAllTrades(knownUserId?: string | null): Promise<TradeRecord[]> {
     if (!isSupabaseConfigured()) return this._getLocalTrades();
 
-    const userId = await getCurrentUserId();
+    const userId = knownUserId ?? await getCurrentUserId();
     if (!userId) return this._getLocalTrades();
 
     const { data, error } = await supabase
@@ -238,10 +238,10 @@ export const tradeRepository = {
 
   // ── Settings ─────────────────────────────────────────────────────────────────
 
-  async getSettings(): Promise<UserSettings> {
+  async getSettings(knownUserId?: string | null): Promise<UserSettings> {
     if (!isSupabaseConfigured()) return this._getLocalSettings();
 
-    const userId = await getCurrentUserId();
+    const userId = knownUserId ?? await getCurrentUserId();
     if (!userId) return this._getLocalSettings();
 
     const { data, error } = await supabase
@@ -250,8 +250,11 @@ export const tradeRepository = {
       .eq('user_id', userId)
       .single();
 
-    if (error || !data) return DEFAULT_USER_SETTINGS;
-    return { ...DEFAULT_USER_SETTINGS, ...(data.data as UserSettings) };
+    if (error || !data) return this._getLocalSettings();
+    const merged = { ...DEFAULT_USER_SETTINGS, ...(data.data as UserSettings) };
+    // Update local cache
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+    return merged;
   },
 
   async saveSettings(settings: UserSettings): Promise<void> {
