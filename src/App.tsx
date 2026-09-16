@@ -154,14 +154,19 @@ export default function App() {
   }, [user, authLoading, refreshData]);
 
   const handleSaveTrade = async (tradeData: Partial<TradeRecord>) => {
-    if (editingTrade) {
-      await tradeRepository.updateTrade(editingTrade.id, tradeData);
-    } else {
-      await tradeRepository.saveTrade(tradeData);
-    }
-    await refreshData();
+    // ── Close the modal immediately (optimistic UI) ────────────────────────
+    // saveTrade / updateTrade write to localStorage synchronously first,
+    // then fire Supabase in the background — so the UI updates instantly.
     setIsWizardOpen(false);
     setEditingTrade(null);
+
+    if (editingTrade) {
+      await tradeRepository.updateTrade(editingTrade.id, tradeData, user?.id);
+    } else {
+      await tradeRepository.saveTrade(tradeData, user?.id);
+    }
+    // Reload from local cache (already updated above — instant)
+    setBaseTradesState(tradeRepository._getLocalTrades());
   };
 
   const handleOpenTradeDetail = (trade: TradeRecord) => {
@@ -185,9 +190,10 @@ export default function App() {
   };
 
   const handleDeleteTrade = async (tradeId: string) => {
-    await tradeRepository.deleteTrade(tradeId);
-    await refreshData();
+    // Optimistic: remove from UI instantly, sync Supabase in background
     setActiveDetailTrade(null);
+    setBaseTradesState((prev) => prev.filter((t) => t.id !== tradeId));
+    await tradeRepository.deleteTrade(tradeId);
   };
 
   const handleSaveSettings = async (newSettings: UserSettings) => {

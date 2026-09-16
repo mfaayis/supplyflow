@@ -81,35 +81,35 @@ export const tradeRepository = {
     return trades.find((t) => t.id === id);
   },
 
-  async saveTrade(trade: Partial<TradeRecord> | TradeRecord): Promise<void> {
+  async saveTrade(trade: Partial<TradeRecord> | TradeRecord, knownUserId?: string | null): Promise<void> {
     const tradeId = trade.id || 'trade-' + Date.now();
     const fullTrade: TradeRecord = this._buildFullTrade(trade, tradeId);
 
-    if (isSupabaseConfigured()) {
-      const userId = await getCurrentUserId();
-      if (userId) {
-        const { error } = await supabase.from('trades').upsert(
-          { id: tradeId, user_id: userId, data: fullTrade, updated_at: new Date().toISOString() },
-          { onConflict: 'id' }
-        );
-        if (error) {
-          console.error('Failed to save trade to Supabase:', error);
-          throw new Error('Database error: Unable to save trade.');
-        }
-      }
-    }
-
-    // Update local cache
+    // ── Write to local cache immediately (optimistic) ──────────────────────
     const local = this._getLocalTrades();
     const idx = local.findIndex((t) => t.id === tradeId);
     const updated = idx >= 0 ? [...local] : [fullTrade, ...local];
     if (idx >= 0) updated[idx] = fullTrade;
     localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(updated));
     notifyListeners();
+
+    // ── Sync to Supabase in the background (non-blocking) ─────────────────
+    if (isSupabaseConfigured()) {
+      const userId = knownUserId ?? await getCurrentUserId();
+      if (userId) {
+        supabase.from('trades').upsert(
+          { id: tradeId, user_id: userId, data: fullTrade, updated_at: new Date().toISOString() },
+          { onConflict: 'id' }
+        ).then(({ error }) => {
+          if (error) console.error('Failed to sync trade to Supabase:', error);
+        });
+      }
+    }
   },
 
-  async updateTrade(id: string, updates: Partial<TradeRecord>): Promise<void> {
-    const trades = await this.getAllTrades();
+  async updateTrade(id: string, updates: Partial<TradeRecord>, knownUserId?: string | null): Promise<void> {
+    // ── Read from local cache instantly (no network call) ─────────────────
+    const trades = this._getLocalTrades();
     const idx = trades.findIndex((t) => t.id === id);
     if (idx < 0) return;
 
@@ -126,44 +126,44 @@ export const tradeRepository = {
       updatedAt: new Date().toISOString(),
     };
 
-    if (isSupabaseConfigured()) {
-      const userId = await getCurrentUserId();
-      if (userId) {
-        const { error } = await supabase.from('trades').upsert(
-          { id, user_id: userId, data: updatedTrade, updated_at: new Date().toISOString() },
-          { onConflict: 'id' }
-        );
-        if (error) {
-          console.error('Failed to update trade in Supabase:', error);
-          throw new Error('Database error: Unable to update trade.');
-        }
-      }
-    }
-
+    // ── Write to local cache immediately (optimistic) ──────────────────────
     trades[idx] = updatedTrade;
     localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(trades));
     notifyListeners();
-  },
 
-  async deleteTrade(id: string): Promise<void> {
+    // ── Sync to Supabase in the background (non-blocking) ─────────────────
     if (isSupabaseConfigured()) {
-      const userId = await getCurrentUserId();
+      const userId = knownUserId ?? await getCurrentUserId();
       if (userId) {
-        const { error } = await supabase
-          .from('trades')
-          .delete()
-          .eq('id', id)
-          .eq('user_id', userId);
-        if (error) {
-          console.error('Failed to delete trade from Supabase:', error);
-          throw new Error('Database error: Unable to delete trade.');
-        }
+        supabase.from('trades').upsert(
+          { id, user_id: userId, data: updatedTrade, updated_at: new Date().toISOString() },
+          { onConflict: 'id' }
+        ).then(({ error }) => {
+          if (error) console.error('Failed to sync updated trade to Supabase:', error);
+        });
       }
     }
+  },
 
+  async deleteTrade(id: string, knownUserId?: string | null): Promise<void> {
+    // ── Remove from local cache immediately ────────────────────────────────
     const local = this._getLocalTrades().filter((t) => t.id !== id);
     localStorage.setItem(TRADES_STORAGE_KEY, JSON.stringify(local));
     notifyListeners();
+
+    // ── Sync delete to Supabase in the background ──────────────────────────
+    if (isSupabaseConfigured()) {
+      const userId = knownUserId ?? await getCurrentUserId();
+      if (userId) {
+        supabase.from('trades')
+          .delete()
+          .eq('id', id)
+          .eq('user_id', userId)
+          .then(({ error }) => {
+            if (error) console.error('Failed to delete trade from Supabase:', error);
+          });
+      }
+    }
   },
 
   async duplicateTrade(id: string): Promise<TradeRecord | null> {
